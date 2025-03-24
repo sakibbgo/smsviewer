@@ -1,0 +1,9 @@
+<resources>
+    <color name="primary">#6200EE</color>
+    <color name="primaryVariant">#3700B3</color>
+    <color name="secondary">#03DAC5</color>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <color name="background_color">#F5F5F5</color> <!-- Light Gray -->
+    <color name="button_color">#FF6200EE</color> <!-- Material Purple -->
+</resources>

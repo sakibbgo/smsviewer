@@ -1,0 +1,4 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@android:color/white" /> <!-- White background for the ScrollView -->
+    <corners android:radius="16dp" /> <!-- Rounded corners with a radius -->
+</shape>
