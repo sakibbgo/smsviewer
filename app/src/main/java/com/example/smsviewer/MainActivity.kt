@@ -193,11 +193,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        smsLog = findViewById(R.id.smsLog)
+        //smsLog = findViewById(R.id.smsLog)
         simInfoTextView = findViewById(R.id.simInfoTextView)
         sim1EditText = findViewById(R.id.sim1Number)
         sim2EditText = findViewById(R.id.sim2Number)
         saveButton = findViewById(R.id.saveButton)
+        requestPermissions()
 
         findViewById<Button>(R.id.requestPermissionBtn).setOnClickListener {
             requestPermissions()
@@ -221,6 +222,8 @@ class MainActivity : AppCompatActivity() {
                     registerReceiver(smsUpdateReceiver, filter)
                     isListeningToSms = true
                     Toast.makeText(this, "SIM numbers saved. Now listening to SMS.", Toast.LENGTH_SHORT).show()
+                    smsLog = findViewById(R.id.smsLog)
+                    smsLog.text = "SMS viewer is ready!"
                 }
             } catch (e: Exception) {
                 Log.e("SAVE_ERROR", "Failed to save numbers or register receiver: ${e.localizedMessage}", e)

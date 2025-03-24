@@ -96,7 +96,7 @@
             android:id="@+id/smsLog"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="SMS Log"
+            android:text="Save phone number to start!"
             android:textSize="16sp"
             android:textColor="@android:color/black"
             android:lineSpacingExtra="4dp" />
