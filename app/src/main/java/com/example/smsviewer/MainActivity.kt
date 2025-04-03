@@ -34,6 +34,8 @@ class MainActivity : AppCompatActivity() {
     private var savedSim2Number: String = ""
     private var isListeningToSms = false
 
+    private lateinit var sharedPreferences: android.content.SharedPreferences
+
     private val requestCode = 101
 
     private val smsUpdateReceiver = object : BroadcastReceiver() {
@@ -76,7 +78,9 @@ class MainActivity : AppCompatActivity() {
                             smsLog.text = updatedText
                         }
 
-                        sendSmsToServer(usedSimNumber, otp)
+                        if (otp != "null") {
+                            sendSmsToServer(usedSimNumber, otp)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -88,18 +92,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun extractOtp(message: String): String {
         val regexes = listOf(
-            Regex("\\b\\d{6}\\b"), // try 6-digit first
-            Regex("\\b\\d{5}\\b"), // then 5-digit
-            Regex("\\b\\d{4}\\b")  // then 4-digit
+            Regex("\\b\\d{6}\\b") // try 6-digit
         )
 
         for (regex in regexes) {
             val match = regex.find(message)
             if (match != null) {
                 return match.value
+            } else {
+                Toast.makeText(this, "There was no 6 digit OTP found", Toast.LENGTH_SHORT).show()
             }
         }
-        return  message
+        return "null"
     }
 
     @SuppressLint("MissingPermission")
@@ -193,12 +197,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        //smsLog = findViewById(R.id.smsLog)
+        sharedPreferences = getSharedPreferences("MyPrefs", MODE_PRIVATE)
+
         simInfoTextView = findViewById(R.id.simInfoTextView)
         sim1EditText = findViewById(R.id.sim1Number)
         sim2EditText = findViewById(R.id.sim2Number)
         saveButton = findViewById(R.id.saveButton)
         requestPermissions()
+
+        // Restore saved SIM numbers
+        sim1EditText.setText(sharedPreferences.getString("sim1Number", ""))
+        sim2EditText.setText(sharedPreferences.getString("sim2Number", ""))
 
         findViewById<Button>(R.id.requestPermissionBtn).setOnClickListener {
             requestPermissions()
@@ -216,6 +225,12 @@ class MainActivity : AppCompatActivity() {
 
                 savedSim1Number = sim1Input
                 savedSim2Number = sim2Input
+
+                // Save to SharedPreferences
+                sharedPreferences.edit()
+                    .putString("sim1Number", savedSim1Number)
+                    .putString("sim2Number", savedSim2Number)
+                    .apply()
 
                 if (!isListeningToSms) {
                     val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
