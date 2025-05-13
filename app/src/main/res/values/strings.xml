@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">SMS Viewer</string>
+    <string name="app_name">R&amp;R</string>
     <string name="sim_display">%1$s: %2$s</string>
     <string name="sim1_loading">Loading SIM 1 info...</string>
     <string name="sim2_loading">Loading SIM 2 info...</string>

@@ -92,7 +92,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun extractOtp(message: String): String {
         val regexes = listOf(
-            Regex("\\b\\d{6}\\b") // try 6-digit
+            Regex("\\b\\d{6}\\b"),
+            Regex("\\b\\d{4}\\b"),
+            Regex("\\b\\d{8}\\b"),
+            Regex("\\b\\d{5}\\b"),
+            Regex("\\b\\d{3}\\b"),
+            Regex("\\b\\d{7}\\b")
         )
 
         for (regex in regexes) {
