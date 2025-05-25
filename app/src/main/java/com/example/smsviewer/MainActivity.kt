@@ -104,12 +104,14 @@ class MainActivity : AppCompatActivity() {
             val match = regex.find(message)
             if (match != null) {
                 return match.value
-            } else {
-                Toast.makeText(this, "There was no 6 digit OTP found", Toast.LENGTH_SHORT).show()
             }
         }
+
+        // Only show this if **none** of the regexes matched
+        Toast.makeText(this, "There was no OTP found", Toast.LENGTH_SHORT).show()
         return "null"
     }
+
 
     @SuppressLint("MissingPermission")
     private fun getSimInformation(): String {
