@@ -2,11 +2,9 @@ package com.example.smsviewer
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
@@ -17,25 +15,32 @@ import android.util.Log
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import android.view.View
+
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var smsLog: TextView
-    private lateinit var simInfoTextView: TextView
     private lateinit var sim1EditText: EditText
     private lateinit var sim2EditText: EditText
-    private lateinit var saveButton: Button
+    private lateinit var sim1SaveBtn: Button
+    private lateinit var sim2SaveBtn: Button
+    private lateinit var listenBtn: Button
+    private lateinit var clearLogsBtn: Button
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
+    private lateinit var smsLog: TextView
+    private lateinit var smsLogTitle: TextView
 
     private var savedSim1Number: String = ""
     private var savedSim2Number: String = ""
     private var isListeningToSms = false
-
-    private lateinit var sharedPreferences: android.content.SharedPreferences
-
+    private val smsLogList = mutableListOf<String>()
+    private lateinit var sharedPreferences: SharedPreferences
     private val requestCode = 101
 
     private val smsUpdateReceiver = object : BroadcastReceiver() {
@@ -61,26 +66,16 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     runOnUiThread {
-                        simInfoTextView.text = "SIM Info: $simInfo"
+
                     }
 
-                    if (otp.isNotBlank()) {
+                    if (otp.isNotBlank() && otp != "null") {
                         Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | SIM: $usedSimNumber")
                         Toast.makeText(context, "From: $sender\nMessage: $messageBody\nSIM: $usedSimNumber", Toast.LENGTH_LONG).show()
 
-                        runOnUiThread {
-                            val currentText = smsLog.text?.toString() ?: ""
-                            val updatedText = if (currentText == getString(R.string.sms_log_placeholder) || currentText.isBlank()) {
-                                "$sender: $messageBody\nSIM: $usedSimNumber"
-                            } else {
-                                "$currentText\n$sender: $messageBody\nSIM: $usedSimNumber"
-                            }
-                            smsLog.text = updatedText
-                        }
+                        addSmsLog("$sender: $messageBody\nSIM: $usedSimNumber")
 
-                        if (otp != "null") {
-                            sendSmsToServer(usedSimNumber, otp)
-                        }
+                        sendSmsToServer(usedSimNumber, otp)
                     }
                 }
             } catch (e: Exception) {
@@ -111,7 +106,6 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "There was no OTP found", Toast.LENGTH_SHORT).show()
         return "null"
     }
-
 
     @SuppressLint("MissingPermission")
     private fun getSimInformation(): String {
@@ -206,52 +200,111 @@ class MainActivity : AppCompatActivity() {
 
         sharedPreferences = getSharedPreferences("MyPrefs", MODE_PRIVATE)
 
-        simInfoTextView = findViewById(R.id.simInfoTextView)
+        // Find all views by new IDs
         sim1EditText = findViewById(R.id.sim1Number)
         sim2EditText = findViewById(R.id.sim2Number)
-        saveButton = findViewById(R.id.saveButton)
-        requestPermissions()
+        sim1SaveBtn = findViewById(R.id.sim1SaveBtn)
+        sim2SaveBtn = findViewById(R.id.sim2SaveBtn)
+        listenBtn = findViewById(R.id.listenBtn)
+        clearLogsBtn = findViewById(R.id.clearLogsBtn)
+        statusDot = findViewById(R.id.statusDot)
+        statusText = findViewById(R.id.statusText)
+        smsLog = findViewById(R.id.smsLog)
+        smsLogTitle = findViewById(R.id.smsLogTitle)
 
         // Restore saved SIM numbers
         sim1EditText.setText(sharedPreferences.getString("sim1Number", ""))
         sim2EditText.setText(sharedPreferences.getString("sim2Number", ""))
 
-        findViewById<Button>(R.id.requestPermissionBtn).setOnClickListener {
+        savedSim1Number = sim1EditText.text.toString()
+        savedSim2Number = sim2EditText.text.toString()
+
+        // Request permissions on launch
+        if (!hasPermissions()) {
             requestPermissions()
         }
 
-        saveButton.setOnClickListener {
-            try {
-                val sim1Input = sim1EditText.text.toString().trim()
-                val sim2Input = sim2EditText.text.toString().trim()
+        // SIM 1 Save Button
+        sim1SaveBtn.setOnClickListener {
+            val sim1Input = sim1EditText.text.toString().trim()
+            if (sim1Input.length != 11) {
+                Toast.makeText(this, "Enter a valid 11-digit SIM 1 number", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            savedSim1Number = sim1Input
+            sharedPreferences.edit().putString("sim1Number", savedSim1Number).apply()
+            Toast.makeText(this, "SIM 1 number saved", Toast.LENGTH_SHORT).show()
+        }
 
-                if (sim1Input.isBlank() && sim2Input.isBlank()) {
-                    Toast.makeText(this, "Please enter at least one SIM number", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
+        // SIM 2 Save Button
+        sim2SaveBtn.setOnClickListener {
+            val sim2Input = sim2EditText.text.toString().trim()
+            if (sim2Input.length != 11) {
+                Toast.makeText(this, "Enter a valid 11-digit SIM 2 number", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            savedSim2Number = sim2Input
+            sharedPreferences.edit().putString("sim2Number", savedSim2Number).apply()
+            Toast.makeText(this, "SIM 2 number saved", Toast.LENGTH_SHORT).show()
+        }
 
-                savedSim1Number = sim1Input
-                savedSim2Number = sim2Input
-
-                // Save to SharedPreferences
-                sharedPreferences.edit()
-                    .putString("sim1Number", savedSim1Number)
-                    .putString("sim2Number", savedSim2Number)
-                    .apply()
-
-                if (!isListeningToSms) {
-                    val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-                    registerReceiver(smsUpdateReceiver, filter)
-                    isListeningToSms = true
-                    Toast.makeText(this, "SIM numbers saved. Now listening to SMS.", Toast.LENGTH_SHORT).show()
-                    smsLog = findViewById(R.id.smsLog)
-                    smsLog.text = "SMS viewer is ready!"
-                }
-            } catch (e: Exception) {
-                Log.e("SAVE_ERROR", "Failed to save numbers or register receiver: ${e.localizedMessage}", e)
-                Toast.makeText(this, "Failed to start SMS listening: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+        // Listen/Stop toggle
+        listenBtn.setOnClickListener {
+            if (!isListeningToSms) {
+                // Start listening
+                val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
+                registerReceiver(smsUpdateReceiver, filter)
+                isListeningToSms = true
+                updateStatus()
+                Toast.makeText(this, "Started listening to SMS", Toast.LENGTH_SHORT).show()
+            } else {
+                // Stop listening
+                try {
+                    unregisterReceiver(smsUpdateReceiver)
+                } catch (_: Exception) {}
+                isListeningToSms = false
+                updateStatus()
+                Toast.makeText(this, "Stopped listening to SMS", Toast.LENGTH_SHORT).show()
             }
         }
+
+        // Clear logs button
+        clearLogsBtn.setOnClickListener {
+            smsLogList.clear()
+            smsLog.text = "No SMS logs yet"
+            smsLogTitle.text = "SMS Logs (0)"
+        }
+
+        // Set initial status
+        updateStatus()
+
+        // Set initial logs (if any)
+        smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
+        smsLogTitle.text = "SMS Logs (${smsLogList.size})"
+    }
+
+    // Update the Online/Offline status and Listen/Stop button color/text
+    private fun updateStatus() {
+        if (isListeningToSms) {
+            statusDot.setBackgroundResource(R.drawable.dot_green)
+            statusText.text = "Online"
+            statusText.setTextColor(Color.parseColor("#41B619"))
+            listenBtn.text = "Stop Listening"
+            listenBtn.setBackgroundColor(Color.parseColor("#E53935"))
+        } else {
+            statusDot.setBackgroundResource(R.drawable.dot_red)
+            statusText.text = "Offline"
+            statusText.setTextColor(Color.parseColor("#AA0000"))
+            listenBtn.text = "Start Listening"
+            listenBtn.setBackgroundColor(Color.parseColor("#41B619"))
+        }
+    }
+
+    // Log append utility
+    private fun addSmsLog(logMsg: String) {
+        smsLogList.add(0, logMsg) // New logs at top
+        smsLog.text = smsLogList.joinToString("\n\n")
+        smsLogTitle.text = "SMS Logs (${smsLogList.size})"
     }
 
     private fun hasPermissions(): Boolean {
@@ -262,7 +315,7 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.ACCESS_NETWORK_STATE,
             Manifest.permission.INTERNET
         ).all {
-            ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
     }
 
