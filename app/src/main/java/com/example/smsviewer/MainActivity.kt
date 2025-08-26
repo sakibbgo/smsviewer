@@ -7,12 +7,12 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Bundle
+import android.os.*
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
-import android.telephony.TelephonyManager
 import android.util.Log
 import android.widget.*
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -20,8 +20,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import android.view.View
 
+// Internal broadcast action so the Receiver can push log lines to the UI when the Activity is visible.
+private const val ACTION_SMS_LOG = "com.example.smsviewer.ACTION_SMS_LOG"
 
 class MainActivity : AppCompatActivity() {
 
@@ -43,155 +44,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sharedPreferences: SharedPreferences
     private val requestCode = 101
 
-    private val smsUpdateReceiver = object : BroadcastReceiver() {
+    // Receiver to update UI log when the background SmsReceiver broadcasts a new log line
+    private val uiLogReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            try {
-                if (intent?.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-                    val smsMessages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                    if (smsMessages.isEmpty()) {
-                        Log.e("SMS_RECEIVED", "No SMS messages found in intent")
-                        return
-                    }
-
-                    val sender = smsMessages.firstOrNull()?.displayOriginatingAddress ?: "Unknown Sender"
-                    val messageBody = smsMessages.firstOrNull()?.messageBody ?: "No Message"
-                    val otp = extractOtp(messageBody)
-                    val simInfo = getSimInformation()
-
-                    val subscriptionId = intent.extras?.getInt("subscription", -1) ?: -1
-                    val usedSimNumber = when (subscriptionId) {
-                        getSimSubscriptionId(0) -> savedSim1Number
-                        getSimSubscriptionId(1) -> savedSim2Number
-                        else -> "Unknown SIM"
-                    }
-
-                    runOnUiThread {
-
-                    }
-
-                    if (otp.isNotBlank() && otp != "null") {
-                        Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | SIM: $usedSimNumber")
-                        Toast.makeText(context, "From: $sender\nMessage: $messageBody\nSIM: $usedSimNumber", Toast.LENGTH_LONG).show()
-
-                        addSmsLog("$sender: $messageBody\nSIM: $usedSimNumber")
-
-                        sendSmsToServer(usedSimNumber, otp)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("SMS_RECEIVER_ERROR", "Error handling SMS: ${e.localizedMessage}", e)
-                Toast.makeText(context, "Error handling SMS: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-            }
+            val log = intent?.getStringExtra("log") ?: return
+            addSmsLog(log)
         }
-    }
-
-    private fun extractOtp(message: String): String {
-        val regexes = listOf(
-            Regex("\\b\\d{6}\\b"),
-            Regex("\\b\\d{4}\\b"),
-            Regex("\\b\\d{8}\\b"),
-            Regex("\\b\\d{5}\\b"),
-            Regex("\\b\\d{3}\\b"),
-            Regex("\\b\\d{7}\\b")
-        )
-
-        for (regex in regexes) {
-            val match = regex.find(message)
-            if (match != null) {
-                return match.value
-            }
-        }
-
-        // Only show this if **none** of the regexes matched
-        Toast.makeText(this, "There was no OTP found", Toast.LENGTH_SHORT).show()
-        return "null"
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun getSimInformation(): String {
-        return try {
-            val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-            val subscriptionInfoList = subscriptionManager.activeSubscriptionInfoList
-            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-
-            if (subscriptionInfoList.isNullOrEmpty()) {
-                "No SIM detected"
-            } else {
-                val sim1Info = subscriptionInfoList.getOrNull(0)
-                val sim2Info = subscriptionInfoList.getOrNull(1)
-
-                val sim1Number = sim1Info?.let {
-                    telephonyManager.createForSubscriptionId(it.subscriptionId).line1Number
-                } ?: "Unknown"
-
-                val sim2Number = sim2Info?.let {
-                    telephonyManager.createForSubscriptionId(it.subscriptionId).line1Number
-                } ?: "Unknown"
-
-                "SIM 1: $sim1Number | SIM 2: $sim2Number"
-            }
-        } catch (e: Exception) {
-            Log.e("SIM_INFO_ERROR", "Failed to retrieve SIM info: ${e.localizedMessage}", e)
-            "SIM info not available"
-        }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun getSimSubscriptionId(slotIndex: Int): Int {
-        return try {
-            val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-            subscriptionManager.activeSubscriptionInfoList
-                ?.getOrNull(slotIndex)
-                ?.subscriptionId ?: -1
-        } catch (e: Exception) {
-            Log.e("SIM_SLOT_ERROR", "Error getting subscription ID: ${e.localizedMessage}", e)
-            -1
-        }
-    }
-
-    private fun sendSmsToServer(sender: String, otp: String) {
-        Thread {
-            try {
-                val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val network = connectivityManager.activeNetwork
-                val capabilities = connectivityManager.getNetworkCapabilities(network)
-                val hasInternet = capabilities != null &&
-                        (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                                || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-                                || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
-
-                if (!hasInternet) {
-                    runOnUiThread {
-                        Toast.makeText(this, "No internet connection", Toast.LENGTH_SHORT).show()
-                    }
-                    return@Thread
-                }
-
-                val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$otp")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = 5000
-                connection.readTimeout = 5000
-                connection.requestMethod = "GET"
-                connection.connect()
-
-                val responseCode = connection.responseCode
-                val reader = BufferedReader(InputStreamReader(connection.inputStream))
-                val response = reader.readText()
-                reader.close()
-
-                Log.d("Server Response", "Code: $responseCode, Response: $response")
-
-                runOnUiThread {
-                    Toast.makeText(this, "OTP sent successfully", Toast.LENGTH_SHORT).show()
-                }
-
-            } catch (e: Exception) {
-                Log.e("Network Error", "Error sending OTP: ${e.localizedMessage}", e)
-                runOnUiThread {
-                    Toast.makeText(this, "Failed to send OTP: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }.start()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -248,24 +106,20 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "SIM 2 number saved", Toast.LENGTH_SHORT).show()
         }
 
-        // Listen/Stop toggle
+        // Initialize listening state from the actual component enabled state
+        isListeningToSms = isSmsReceiverEnabled(this)
+        updateStatus()
+
+        // Listen/Stop toggle (toggles manifest-declared receiver instead of dynamic register/unregister)
         listenBtn.setOnClickListener {
-            if (!isListeningToSms) {
-                // Start listening
-                val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-                registerReceiver(smsUpdateReceiver, filter)
-                isListeningToSms = true
-                updateStatus()
-                Toast.makeText(this, "Started listening to SMS", Toast.LENGTH_SHORT).show()
-            } else {
-                // Stop listening
-                try {
-                    unregisterReceiver(smsUpdateReceiver)
-                } catch (_: Exception) {}
-                isListeningToSms = false
-                updateStatus()
-                Toast.makeText(this, "Stopped listening to SMS", Toast.LENGTH_SHORT).show()
-            }
+            isListeningToSms = !isListeningToSms
+            setSmsListening(this, isListeningToSms)
+            updateStatus()
+            Toast.makeText(
+                this,
+                if (isListeningToSms) "Started listening to SMS" else "Stopped listening to SMS",
+                Toast.LENGTH_SHORT
+            ).show()
         }
 
         // Clear logs button
@@ -275,12 +129,29 @@ class MainActivity : AppCompatActivity() {
             smsLogTitle.text = "SMS Logs (0)"
         }
 
-        // Set initial status
-        updateStatus()
-
         // Set initial logs (if any)
         smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Register to receive UI log updates from the SmsReceiver while the Activity is visible
+        val filter = IntentFilter(ACTION_SMS_LOG)
+        // Use AndroidX compat to apply NOT_EXPORTED on API 33+ automatically
+        ContextCompat.registerReceiver(
+            this,
+            uiLogReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    override fun onStop() {
+        super.onStop()
+        try {
+            unregisterReceiver(uiLogReceiver)
+        } catch (_: Exception) { }
     }
 
     // Update the Online/Offline status and Listen/Stop button color/text
@@ -333,14 +204,176 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        if (isListeningToSms) {
+    /** Toggle the manifest-declared SMS receiver without killing the app process. */
+    private fun setSmsListening(context: Context, enabled: Boolean) {
+        val pm = context.packageManager
+        val cn = ComponentName(context, SmsReceiver::class.java)
+        pm.setComponentEnabledSetting(
+            cn,
+            if (enabled) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP
+        )
+    }
+
+    /** Read whether the manifest receiver is currently enabled. */
+    private fun isSmsReceiverEnabled(context: Context): Boolean {
+        val pm = context.packageManager
+        val cn = ComponentName(context, SmsReceiver::class.java)
+        return when (pm.getComponentEnabledSetting(cn)) {
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED -> false
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+            else -> true // DEFAULT follows manifest (enabled=true in manifest)
+        }
+    }
+}
+
+/** Manifest-declared receiver that survives idle/Doze and wakes the app for SMS. */
+class SmsReceiver : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (Telephony.Sms.Intents.SMS_RECEIVED_ACTION != intent.action) return
+
+        // Keep the receiver alive until our async work is enqueued
+        val pending = goAsync()
+
+        Thread {
             try {
-                unregisterReceiver(smsUpdateReceiver)
+                val smsMessages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+                if (smsMessages.isEmpty()) {
+                    Log.e("SMS_RECEIVED", "No SMS messages found in intent")
+                    return@Thread
+                }
+
+                val sender = smsMessages.firstOrNull()?.displayOriginatingAddress ?: "Unknown Sender"
+                val messageBody = smsMessages.joinToString("") { it.messageBody ?: "" }
+                val otp = extractOtp(messageBody)
+
+                // Determine which SIM received the SMS using subscription id → slot index
+                val subscriptionId = intent.extras?.getInt(
+                    "subscription",
+                    SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                ) ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID
+
+                val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
+
+                if (otp.isNotBlank() && otp != "null") {
+                    Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | SIM: $usedSimNumber")
+
+                    // Toast on main thread (optional)
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(
+                            context,
+                            "From: $sender\nMessage: $messageBody\nSIM: $usedSimNumber",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+
+                    // Update UI log if Activity is visible
+                    context.sendBroadcast(
+                        Intent(ACTION_SMS_LOG)
+                            .setPackage(context.packageName)
+                            .putExtra("log", "$sender: $messageBody\nSIM: $usedSimNumber")
+                    )
+
+                    // Ship OTP to your server
+                    sendSmsToServer(context, usedSimNumber, otp)
+                }
             } catch (e: Exception) {
-                Log.e("UNREGISTER_ERROR", "Receiver was not registered or already unregistered", e)
+                Log.e("SMS_RECEIVER_ERROR", "Error handling SMS: ${e.localizedMessage}", e)
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(context, "Error handling SMS: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                pending.finish()
+            }
+        }.start()
+    }
+
+    private fun resolveSavedSimNumber(context: Context, subscriptionId: Int): String {
+        val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+        val sim1 = sp.getString("sim1Number", "") ?: ""
+        val sim2 = sp.getString("sim2Number", "") ?: ""
+
+        val slotIndex = getSlotIndex(context, subscriptionId)
+        return when (slotIndex) {
+            0 -> if (sim1.isNotBlank()) sim1 else "Unknown SIM"
+            1 -> if (sim2.isNotBlank()) sim2 else "Unknown SIM"
+            else -> "Unknown SIM"
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getSlotIndex(context: Context, subId: Int): Int {
+        if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return -1
+        return try {
+            val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+            val info = sm.activeSubscriptionInfoList?.firstOrNull { it.subscriptionId == subId }
+            info?.simSlotIndex ?: -1
+        } catch (e: Exception) {
+            Log.e("SIM_SLOT_ERROR", "Error getting slot index: ${e.localizedMessage}", e)
+            -1
+        }
+    }
+
+    /** Based on your original; runs off the main thread and posts UI toasts safely. */
+    private fun sendSmsToServer(context: Context, sender: String, otp: String) {
+        try {
+            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            val hasInternet = capabilities != null &&
+                    (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                            || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                            || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+
+            if (!hasInternet) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(context, "No internet connection", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+
+            val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$otp")
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                requestMethod = "GET"
+            }
+            connection.connect()
+
+            val responseCode = connection.responseCode
+            val reader = BufferedReader(InputStreamReader(connection.inputStream))
+            val response = reader.readText()
+            reader.close()
+
+            Log.d("Server Response", "Code: $responseCode, Response: $response")
+
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "OTP sent successfully", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Log.e("Network Error", "Error sending OTP: ${e.localizedMessage}", e)
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "Failed to send OTP: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun extractOtp(message: String): String {
+        val regexes = listOf(
+            Regex("\\b\\d{6}\\b"),
+            Regex("\\b\\d{4}\\b"),
+            Regex("\\b\\d{8}\\b"),
+            Regex("\\b\\d{5}\\b"),
+            Regex("\\b\\d{3}\\b"),
+            Regex("\\b\\d{7}\\b")
+        )
+        for (regex in regexes) {
+            val match = regex.find(message)
+            if (match != null) return match.value
+        }
+        // No OTP found
+        return "null"
     }
 }

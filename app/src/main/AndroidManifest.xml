@@ -6,7 +6,7 @@
     <!-- Declare hardware telephony as optional -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
-    <!-- Permissions -->
+    <!-- Permissions (kept exactly as you had them) -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
@@ -36,16 +36,15 @@
             </intent-filter>
         </activity>
 
-        <!-- Removed SMS Broadcast Receiver as it is handled in MainActivity now -->
-        <!-- <receiver
+        <!-- Manifest-declared SMS Broadcast Receiver (so it works during idle/Doze) -->
+        <receiver
             android:name=".SmsReceiver"
             android:exported="true"
-            android:permission="android.permission.BROADCAST_SMS"
-            tools:ignore="ProtectedPermissions">
-            <intent-filter>
+            android:enabled="true">
+            <intent-filter android:priority="999">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
             </intent-filter>
-        </receiver> -->
+        </receiver>
 
     </application>
 
