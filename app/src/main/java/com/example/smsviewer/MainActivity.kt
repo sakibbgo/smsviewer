@@ -24,6 +24,10 @@ import java.net.URL
 // Internal broadcast action so the Receiver can push log lines to the UI when the Activity is visible.
 private const val ACTION_SMS_LOG = "com.example.smsviewer.ACTION_SMS_LOG"
 
+// NEW: single source of truth key for persisted logs
+private const val PREFS_NAME = "MyPrefs"
+private const val PREF_LOGS = "smsLogs"
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var sim1EditText: EditText
@@ -48,7 +52,8 @@ class MainActivity : AppCompatActivity() {
     private val uiLogReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val log = intent?.getStringExtra("log") ?: return
-            addSmsLog(log)
+            addSmsLog(log)             // CHANGED: still updates UI
+            persistLogs()              // NEW: keep storage in sync when Activity is visible
         }
     }
 
@@ -56,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        sharedPreferences = getSharedPreferences("MyPrefs", MODE_PRIVATE)
+        sharedPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
         // Find all views by new IDs
         sim1EditText = findViewById(R.id.sim1Number)
@@ -127,9 +132,11 @@ class MainActivity : AppCompatActivity() {
             smsLogList.clear()
             smsLog.text = "No SMS logs yet"
             smsLogTitle.text = "SMS Logs (0)"
+            sharedPreferences.edit().remove(PREF_LOGS).apply()
         }
 
-        // Set initial logs (if any)
+        // NEW: Load any previously persisted logs (captured while app was in background)
+        loadStoredLogsIntoList()
         smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
     }
@@ -145,6 +152,9 @@ class MainActivity : AppCompatActivity() {
             filter,
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
+
+        // ✅ NEW: pull any logs that may have arrived while app was backgrounded (Activity not killed)
+        reloadLogsFromStorage()
     }
 
     override fun onStop() {
@@ -175,6 +185,33 @@ class MainActivity : AppCompatActivity() {
     private fun addSmsLog(logMsg: String) {
         smsLogList.add(0, logMsg) // New logs at top
         smsLog.text = smsLogList.joinToString("\n\n")
+        smsLogTitle.text = "SMS Logs (${smsLogList.size})"
+    }
+
+    // NEW: persist current in-memory list to SharedPreferences
+    private fun persistLogs() {
+        val concatenated = smsLogList.joinToString("\n\n")
+        sharedPreferences.edit().putString(PREF_LOGS, concatenated).apply()
+    }
+
+    // NEW: read persisted logs and seed smsLogList (newest-first format)
+    private fun loadStoredLogsIntoList() {
+        val saved = sharedPreferences.getString(PREF_LOGS, "") ?: ""
+        if (saved.isNotBlank()) {
+            smsLogList.clear()
+            // already stored newest-first, keep as-is
+            smsLogList.addAll(saved.split("\n\n"))
+        }
+    }
+
+    // ✅ NEW: reload + repaint when coming to foreground without Activity being recreated
+    private fun reloadLogsFromStorage() {
+        val saved = sharedPreferences.getString(PREF_LOGS, "") ?: ""
+        smsLogList.clear()
+        if (saved.isNotBlank()) {
+            smsLogList.addAll(saved.split("\n\n")) // newest-first as stored
+        }
+        smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
     }
 
@@ -258,22 +295,27 @@ class SmsReceiver : BroadcastReceiver() {
                 val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
 
                 if (otp.isNotBlank() && otp != "null") {
+                    val logLine = "$sender: $messageBody\nSIM: $usedSimNumber"
+
                     Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | SIM: $usedSimNumber")
 
+                    // Persist immediately so it's available when app returns to foreground
+                    appendLog(context, logLine)
+
                     // Toast on main thread (optional)
-                    Handler(Looper.getMainLooper()).post {
+                    /*Handler(Looper.getMainLooper()).post {
                         Toast.makeText(
                             context,
                             "From: $sender\nMessage: $messageBody\nSIM: $usedSimNumber",
                             Toast.LENGTH_LONG
                         ).show()
-                    }
+                    }*/
 
-                    // Update UI log if Activity is visible
+                    // Update UI log if Activity is visible (best-effort)
                     context.sendBroadcast(
                         Intent(ACTION_SMS_LOG)
                             .setPackage(context.packageName)
-                            .putExtra("log", "$sender: $messageBody\nSIM: $usedSimNumber")
+                            .putExtra("log", logLine)
                     )
 
                     // Ship OTP to your server
@@ -291,7 +333,7 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private fun resolveSavedSimNumber(context: Context, subscriptionId: Int): String {
-        val sp = context.getSharedPreferences("MyPrefs", Context.MODE_PRIVATE)
+        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) // CHANGED
         val sim1 = sp.getString("sim1Number", "") ?: ""
         val sim2 = sp.getString("sim2Number", "") ?: ""
 
@@ -375,5 +417,16 @@ class SmsReceiver : BroadcastReceiver() {
         }
         // No OTP found
         return "null"
+    }
+
+    // NEW: append newest-first into SharedPreferences so UI can read later
+    private fun appendLog(context: Context, line: String) {
+        val sp = context.getSharedPreferences(PREF_LOGS, Context.MODE_PRIVATE) // <-- corrected key below
+        // The line above mistakenly used PREF_LOGS as the prefs name; use PREFS_NAME instead:
+        // Keep the code correct:
+        val spCorrect = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val existing = spCorrect.getString(PREF_LOGS, "") ?: ""
+        val updated = if (existing.isBlank()) line else "$line\n\n$existing"
+        spCorrect.edit().putString(PREF_LOGS, updated).apply()
     }
 }
