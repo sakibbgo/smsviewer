@@ -170,13 +170,13 @@ class MainActivity : AppCompatActivity() {
             statusDot.setBackgroundResource(R.drawable.dot_green)
             statusText.text = "Online"
             statusText.setTextColor(Color.parseColor("#41B619"))
-            listenBtn.text = "Stop Listening"
+            listenBtn.text = "Deactivate"
             listenBtn.setBackgroundColor(Color.parseColor("#E53935"))
         } else {
             statusDot.setBackgroundResource(R.drawable.dot_red)
             statusText.text = "Offline"
             statusText.setTextColor(Color.parseColor("#AA0000"))
-            listenBtn.text = "Start Listening"
+            listenBtn.text = "Activate"
             listenBtn.setBackgroundColor(Color.parseColor("#41B619"))
         }
     }
@@ -295,9 +295,14 @@ class SmsReceiver : BroadcastReceiver() {
                 val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
 
                 if (otp.isNotBlank() && otp != "null") {
-                    val logLine = "$sender: $messageBody\nSIM: $usedSimNumber"
+                    val simLabel = when (getSlotIndex(context, subscriptionId)) {
+                        0 -> "SIM1"
+                        1 -> "SIM2"
+                        else -> "Unknown SIM"
+                    }
+                    val logLine = "$sender: $messageBody\n$simLabel: $usedSimNumber"
 
-                    Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | SIM: $usedSimNumber")
+                    Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | $simLabel: $usedSimNumber")
 
                     // Persist immediately so it's available when app returns to foreground
                     appendLog(context, logLine)
