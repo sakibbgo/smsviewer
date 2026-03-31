@@ -6,13 +6,14 @@
     <!-- Declare hardware telephony as optional -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
-    <!-- Permissions (kept exactly as you had them) -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:allowBackup="true"
@@ -36,7 +37,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Manifest-declared SMS Broadcast Receiver (so it works during idle/Doze) -->
+        <!-- SMS Broadcast Receiver -->
         <receiver
             android:name=".SmsReceiver"
             android:exported="true"
