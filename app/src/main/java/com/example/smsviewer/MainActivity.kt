@@ -40,6 +40,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smsLog: TextView
     private lateinit var smsLogTitle: TextView
 
+    private lateinit var permSms: TextView
+    private lateinit var smsAllowBtn: Button
+    private lateinit var permSim1: TextView
+    private lateinit var permSim2: TextView
     private lateinit var permNet: TextView
     private lateinit var permBattery: TextView
     private lateinit var screenBtn: Button
@@ -52,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private val smsLogList = mutableListOf<String>()
     private lateinit var sharedPreferences: SharedPreferences
     private val requestCode = 101
+    private val accessRequestCode = 102
 
     private lateinit var networkMonitor: NetworkMonitor
 
@@ -86,9 +91,15 @@ class MainActivity : AppCompatActivity() {
         smsLog = findViewById(R.id.smsLog)
         smsLogTitle = findViewById(R.id.smsLogTitle)
 
+        permSms = findViewById(R.id.permSms)
+        smsAllowBtn = findViewById(R.id.smsAllowBtn)
+        permSim1 = findViewById(R.id.permSim1)
+        permSim2 = findViewById(R.id.permSim2)
         permNet = findViewById(R.id.permNet)
         permBattery = findViewById(R.id.permBattery)
         screenBtn = findViewById(R.id.screenBtn)
+
+        smsAllowBtn.text = "FIX"
 
         sim1EditText.setText(sharedPreferences.getString("sim1Number", ""))
         sim2EditText.setText(sharedPreferences.getString("sim2Number", ""))
@@ -118,6 +129,7 @@ class MainActivity : AppCompatActivity() {
             }
             savedSim1Number = input
             sharedPreferences.edit().putString("sim1Number", input).apply()
+            updateSimIndicators()
         }
 
         sim2SaveBtn.setOnClickListener {
@@ -128,12 +140,15 @@ class MainActivity : AppCompatActivity() {
             }
             savedSim2Number = input
             sharedPreferences.edit().putString("sim2Number", input).apply()
+            updateSimIndicators()
         }
 
         isListeningToSms = isSmsReceiverEnabled(this)
         updateStatus()
         updateNetIndicator()
         updateBatteryStatus()
+        updateAccessIndicator()
+        updateSimIndicators()
 
         listenBtn.setOnClickListener {
             isListeningToSms = !isListeningToSms
@@ -152,6 +167,10 @@ class MainActivity : AppCompatActivity() {
             handleBatteryOptimizationClick()
         }
 
+        smsAllowBtn.setOnClickListener {
+            handleAccessFixClick()
+        }
+
         screenBtn.setOnClickListener {
             openScreenSettings()
         }
@@ -164,6 +183,8 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         refreshInternetUiOnly()
         updateBatteryStatus()
+        updateAccessIndicator()
+        updateSimIndicators()
     }
 
     override fun onDestroy() {
@@ -196,6 +217,21 @@ class MainActivity : AppCompatActivity() {
         try { unregisterReceiver(airplaneModeReceiver) } catch (_: Exception) {}
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            this.requestCode, accessRequestCode -> {
+                updateAccessIndicator()
+                updateSimIndicators()
+                updateStatus()
+            }
+        }
+    }
+
     private fun refreshInternetUiOnly() {
         isInternetAvailable = networkMonitor.isInternetCurrentlyAvailable()
         updateStatus()
@@ -221,6 +257,41 @@ class MainActivity : AppCompatActivity() {
             statusText.setTextColor(Color.parseColor("#AA0000"))
             listenBtn.text = "Activate"
             listenBtn.setBackgroundColor(Color.parseColor("#41B619"))
+        }
+    }
+
+    private fun updateAccessIndicator() {
+        val accessAllowed = hasAccessPermissions()
+
+        if (accessAllowed) {
+            permSms.text = "ACCESS ✔"
+            permSms.setTextColor(Color.parseColor("#2E7D32"))
+            smsAllowBtn.alpha = 0.6f
+        } else {
+            permSms.text = "ACCESS ❌"
+            permSms.setTextColor(Color.parseColor("#AA0000"))
+            smsAllowBtn.alpha = 1.0f
+        }
+    }
+
+    private fun updateSimIndicators() {
+        val sim1Ready = savedSim1Number.trim().length == 11
+        val sim2Ready = savedSim2Number.trim().length == 11
+
+        if (sim1Ready) {
+            permSim1.text = "S1 ✔"
+            permSim1.setTextColor(Color.parseColor("#1565C0"))
+        } else {
+            permSim1.text = "S1 ❌"
+            permSim1.setTextColor(Color.parseColor("#AA0000"))
+        }
+
+        if (sim2Ready) {
+            permSim2.text = "S2 ✔"
+            permSim2.setTextColor(Color.parseColor("#1565C0"))
+        } else {
+            permSim2.text = "S2 ❌"
+            permSim2.setTextColor(Color.parseColor("#AA0000"))
         }
     }
 
@@ -269,6 +340,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleAccessFixClick() {
+        if (hasAccessPermissions()) {
+            Toast.makeText(this, "SMS and Phone permissions already allowed", Toast.LENGTH_SHORT).show()
+            updateAccessIndicator()
+            return
+        }
+
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(
+                Manifest.permission.RECEIVE_SMS,
+                Manifest.permission.READ_SMS,
+                Manifest.permission.READ_PHONE_STATE
+            ),
+            accessRequestCode
+        )
+    }
+
     private fun openScreenSettings() {
         try {
             startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
@@ -303,6 +392,16 @@ class MainActivity : AppCompatActivity() {
         }
         smsLog.text = if (smsLogList.isEmpty()) "No SMS logs yet" else smsLogList.joinToString("\n\n")
         smsLogTitle.text = "SMS Logs (${smsLogList.size})"
+    }
+
+    private fun hasAccessPermissions(): Boolean {
+        return listOf(
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.READ_PHONE_STATE
+        ).all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     private fun hasPermissions(): Boolean {
@@ -434,7 +533,6 @@ class SmsReceiver : BroadcastReceiver() {
 
                     val logLine = "$sender: $messageBody\n$simLabel: $usedSimNumber"
 
-                    // Log first so the full SMS log is always preserved even if sending fails.
                     appendLog(context, logLine)
 
                     context.sendBroadcast(
@@ -443,7 +541,6 @@ class SmsReceiver : BroadcastReceiver() {
                             .putExtra("log", logLine)
                     )
 
-                    // Keep OTP send path after log preservation.
                     sendSmsToServer(context, usedSimNumber, messageBody)
                 }
 
@@ -494,7 +591,6 @@ class SmsReceiver : BroadcastReceiver() {
                             || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
                             || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
 
-            // Do not bail out silently. Some devices report transport state unreliably during transitions.
             if (!hasInternetTransport) {
                 Log.w("OTP_SEND", "No active network transport reported, attempting send anyway")
             }

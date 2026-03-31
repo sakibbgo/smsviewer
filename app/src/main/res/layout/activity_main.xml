@@ -47,7 +47,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:layout_marginBottom="12dp"
+        android:layout_marginBottom="10dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
@@ -57,20 +57,45 @@
             android:layout_height="wrap_content"
             android:layout_marginEnd="4dp"
             android:backgroundTint="#E8F5E9"
-            android:padding="6dp"
+            android:padding="4dp"
             android:text="SMS ✔"
             android:textColor="#2E7D32"
             android:textSize="12sp"
             android:textStyle="bold" />
 
+        <Button
+            android:id="@+id/smsAllowBtn"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="4dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:backgroundTint="#2E5EB8"
+            android:padding="0dp"
+            android:text="🔓"
+            android:textColor="@android:color/white"
+            android:textSize="12sp" />
+
         <TextView
-            android:id="@+id/permSim"
+            android:id="@+id/permSim1"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="4dp"
             android:backgroundTint="#E3F2FD"
-            android:padding="6dp"
-            android:text="SIM ✔"
+            android:padding="4dp"
+            android:text="S1 ✔"
+            android:textColor="#1565C0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/permSim2"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
+            android:backgroundTint="#E3F2FD"
+            android:padding="4dp"
+            android:text="S2 ✔"
             android:textColor="#1565C0"
             android:textSize="12sp"
             android:textStyle="bold" />
@@ -81,7 +106,7 @@
             android:layout_height="wrap_content"
             android:layout_marginEnd="4dp"
             android:backgroundTint="#FFF3E0"
-            android:padding="6dp"
+            android:padding="4dp"
             android:text="NET ✔"
             android:textColor="#EF6C00"
             android:textSize="12sp"
@@ -92,10 +117,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginEnd="4dp"
+            android:backgroundTint="#FCE4EC"
             android:clickable="true"
             android:focusable="true"
-            android:backgroundTint="#FCE4EC"
-            android:padding="6dp"
+            android:padding="4dp"
             android:text="BAT ⚠"
             android:textColor="#C2185B"
             android:textSize="12sp"
